@@ -1,0 +1,254 @@
+---
+title: "PJ2"
+author: "Daniel Zhang"
+date: "Tuesday, April 14, 2015"
+output: html_document
+---
+
+```{r}
+# month data for last 14 months
+#### data preparation #########
+month <- read.csv('months.csv', header = F)
+ctime <- matrix(0, nrow = 3219, ncol = 14)
+for(i in 1:3219){
+  ctime[i,] <- month[i:(i+13), 9]
+}
+ctime <- read.csv('county_time.csv', header = T)
+colnames(ctime)[1] <- 'county name'
+# ctime is a time series for each county
+diff <- matrix(0, ncol = 13, nrow = 3219)
+for(i in 1:13){
+   diff[,i] <- ctime[,i+2] - ctime[,i+1]
+} # diff btw months for each county
+na <- read.table('na_15.txt')
+
+state <- read.csv('state.csv', header = T)
+state_diff <- matrix(0, nrow = 3219, ncol = 13)
+for(i in 1:13){
+  state_diff[i,] <- state[,i+2] - state[,i+1]
+}
+```
+
+```{r}
+# mean changes of counties
+mean_change <- apply(diff, 1, FUN = mean)
+hist(mean_change)
+mean(mean_change)
+
+na_change <- rep(0,13)
+for(i in 1:13){
+  na_change[i] <- na[i+1,4] - na[i+2,4]
+}
+
+# diff of changes btw county and nation
+c_n <- matrix(0, nrow = 3219, ncol = 13)
+for(i in 1: 3219){
+  c_n[i,] <- diff[i,] - na_change
+}
+
+
+# plot of c-n diff for the first four counties
+plot(c_n[1,], type = 'l', ylim = c(-10,10))
+lines(c_n[2,], col = 2)
+lines(c_n[3,], col = 3)
+for(i in 4:100){
+  lines(c_n[i,], col = i)
+}
+
+mc_cn <- apply(c_n, 1, FUN = mean)
+hist(mc_cn)
+# counties changes lightly than nation
+```
+
+```{r}
+######## test if change is the same #########
+n <- 1000
+test <- sample(1:3219, n)
+sample_diff <- diff[test,]
+summation <- 0
+for(i in 1 :n){
+ t <- t.test(na_change, sample_diff[i,], paired = T)
+ if(t$p.value > 0.05){
+   summation <- summation + 1
+ }
+}
+summation / n
+# more than 0.97 
+
+
+########### go through every county ############
+summation <- 0
+for(i in 1 :3219){
+ t <- t.test(na_change, diff[i,], paired = T)
+ if(t$p.value > 0.05){
+   summation <- summation + 1
+ }else{
+   print(i);print(t$p.value)
+ }
+}
+summation / 3219
+# fraction of unsignificant counties - constant model
+```
+
+```{r}
+####### volatile matrix ##########
+th <- 6
+vola <- rep(0,13);n <- 0
+for(i in 1:3219){
+  if(sum(diff[i,]^2) > th){
+    vola <- rbind(vola, diff[i,])
+     n <- n + 1     
+  }
+}
+n
+```
+
+
+```{r}
+#############  see the power of randomForest ##############
+library(randomForest)
+set.seed(123)
+n <- nrow(diff)
+index <- sample(n, n*2/3)
+ctime_test <- ctime[-index,]
+train <- diff[index, ]
+test <- diff[-index, ]
+rf <- randomForest(V13 ~ ., data = train)
+pred <- predict(rf, newdata = test[,-13])
+pred <- ctime_test[,14] + pred
+mean((pred - ctime_test[,15])^2)
+# response varible: change between Feb and Jan 2015
+# features: changes between months
+
+train2 <- ctime[index,]
+test2 <- ctime[-index,]
+rf2 <- randomForest(V14 ~ ., data = train2[,-1])
+pred2 <- predict(rf2, newdata = test2[,-c(1,15)])
+mean((pred2 - test2[,15])^2)
+# response varibale: Feb 
+# feature: rate for months
+# essentially compare the goodness of model instesd of accuracy of March
+```
+
+
+```{r}
+# merge state and county
+ctime <- read.csv('county_time.csv', header = T)
+V1 <- ctime[,1]
+ctime[,1] <- sub('.*, ', '', ctime[,1])
+ctime[,1] <- substr(ctime[,1], 1, 2 )
+state <- read.csv('state3.csv', header = T)
+colnames(ctime)[1] <- 'name'
+colnames(state)[1] <- 'name'
+ctime[320, 1] <- 'DC'
+merged.data <- merge(ctime, state, by = 'name', sort = F)
+state_new <- merged.data[,16:30]
+diff_state <- matrix(0, ncol = 14, nrow = 3219)
+for(i in 1:14){
+   diff_state[,i] <- state_new[,i+1] - state_new[,i]
+} # diff btw months for each state
+merged.data <- cbind(merged.data, diff, diff_state)
+merged.data <- cbind(V1,merged.data)
+write.csv(merged.data, 'merged.data.csv')
+```
+
+
+```{r}
+# mle model   0.2019986
+lambda = 4;
+t <- 12; re <- rep(0, 3219)
+for(i in 6: t){
+ re <- re + (diff[,i] + lambda)/(diff_state[,i] + lambda)
+ re <- round(re, 2)
+}
+cf <- diff_state[,13] * re / t + ctime[,14]
+mean((cf - ctime[,15])^2)
+```
+
+```{r}
+# state model    0.2032153 Feb   1.002895 Jan
+cf <- diff_state[,13] + ctime[,14]
+mean((cf - ctime[,15])^2)
+
+# across the year  0.3323388
+cf <- rep(0,3219); m <- rep(0,13)
+for(i in 1:13){
+  cf <- diff_state[,i] + ctime[,i+1]
+  m[i] <- mean((cf - ctime[,i+2])^2)
+}
+mean(m)
+
+# past six month   0.3915719
+cf <- rep(0,3219); m <- rep(0,6)
+for(i in 1:6){
+  cf <- diff_state[,i+7] + ctime[,i+8]
+  m[i] <- mean((cf - ctime[,i+9])^2)
+}
+mean(m)
+```
+
+```{r}
+# volatile w/o 4.3  markov 5.09
+markov <- read.csv('markhov.csv', header = T)
+markov <- as.vector(markov[,2])
+v_index <- read.csv('volatile_index.csv', header = T)
+v_index <- as.vector(v_index[,1])
+cf <- diff_state[v_index,12] * markov[v_index] + ctime[v_index,13]
+mean((cf - ctime[v_index,14])^2) 
+```
+
+```{r}
+# volatile ratio markov model 0.6746589   w/o 0.800909 past 6 month
+lambda = 4;
+t <- 12; re <- rep(0,length(v_index))
+for(i in 6: t){
+ re <- re + (diff[v_index,i] + lambda)/(diff_state[v_index,i] + lambda)
+ re <- round(re, 2)
+}
+cf <- diff_state[v_index,13] * re / t * markov[v_index] + ctime[v_index,14]
+mean((cf - ctime[v_index,15])^2)
+```
+
+```{r}
+# volatile ratio markov 0.1134774  0.09260033 past 6 month
+lambda = 4;
+t <- 12; re <- rep(0,(3219 - length(v_index)))
+for(i in 6: t){
+ re <- re + (diff[-v_index,i] + lambda)/(diff_state[-v_index,i] + lambda)
+ re <- round(re, 2)
+}
+cf <- diff_state[-v_index,13] * re / t  + ctime[-v_index,14]
+mean((cf - ctime[-v_index,15])^2)
+```
+
+```{r}
+# 0.06688 for unvolatile
+cf <- diff_state[-v_index,13] + ctime[-v_index,14]
+mean((cf - ctime[-v_index,15])^2)
+# 0.6056505 for volatile
+cf <- diff_state[v_index,14] + ctime[v_index,14]
+mean((cf - ctime[v_index,15])^2)
+```
+
+```{r}
+#  0.9081927 for v, 0.09260033 for u  12 month ratio
+#  0.650154               0.1134774     with markov
+lambda = 4;
+t <- 12; re <- rep(0,length(v_index))
+for(i in 1: t){
+ re <- re + (diff[v_index,i] + lambda)/(diff_state[v_index,i] + lambda)
+ re <- round(re, 2)
+}
+cf <- diff_state[v_index,13] * re / t  + ctime[v_index,14]
+mean((cf - ctime[v_index,15])^2)
+
+lambda = 4;
+t <- 12; re <- rep(0,(3219 - length(v_index)))
+for(i in 6: t){
+ re <- re + (diff[-v_index,i] + lambda)/(diff_state[-v_index,i] + lambda)
+ re <- round(re, 2)
+}
+cf <- diff_state[-v_index,13] * re / t * markov[-v_index] + ctime[-v_index,14]
+mean((cf - ctime[-v_index,15])^2)
+```
+
